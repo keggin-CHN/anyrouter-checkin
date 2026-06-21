@@ -1,0 +1,62 @@
+name: "🔄 AnyRouter 每日自动签到"
+
+on:
+  schedule:
+    # 北京时间每天 09:00 = UTC 01:00
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "开启调试模式 (true/false)"
+        required: false
+        default: "false"
+
+jobs:
+  checkin:
+    name: "自动登录 & 推送余额"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. 检出代码 ──────────────────────────────
+      - name: "📦 Checkout 代码"
+        uses: actions/checkout@v4
+
+      # ── 2. 配置 Python ────────────────────────────
+      - name: "🐍 配置 Python 3.11"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # ── 3. 安装依赖 ───────────────────────────────
+      - name: "📥 安装 Python 依赖"
+        run: |
+          pip install -r requirements.txt
+
+      # ── 4. 安装 Playwright & Chromium ─────────────
+      - name: "🌐 安装 Playwright Chromium"
+        run: |
+          playwright install chromium --with-deps
+
+      # ── 5. 执行签到脚本 ───────────────────────────
+      - name: "🚀 执行自动签到"
+        env:
+          AR_USERNAME:   ${{ secrets.AR_USERNAME }}
+          AR_PASSWORD:   ${{ secrets.AR_PASSWORD }}
+          TG_BOT_TOKEN:  ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:    ${{ secrets.TG_CHAT_ID }}
+          PLAYWRIGHT_DEBUG: ${{ inputs.debug == 'true' && '1' || '0' }}
+        run: |
+          echo "⏰ 签到时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S') (BJT)"
+          python checkin.py
+
+      # ── 6. 上传截图（失败时调试用）────────────────
+      - name: "📸 上传截图（仅失败时）"
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-screenshot
+          path: "*.png"
+          retention-days: 3
+          if-no-files-found: ignore
