@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AnyRouter.top 纯协议自动签到 (无浏览器)
-功能:
-  - 破解 acw_sc__v2 JS challenge (Node.js 子进程, 无浏览器)
-  - 用户名/密码登录获取 Bearer token
-  - 签到领配额
-  - 获取余额推送到 Telegram
+AnyRouter.top 纯 Python 协议签到
+- 纯 HTTP 协议，无浏览器
+- 纯 Python 实现，无 Node.js / 第三方服务
+- 单文件，无外部依赖（仅标准库 + requests）
 """
 
 import os
+import re
 import json
 import logging
-import subprocess
 import requests
 from datetime import datetime, timezone, timedelta
 
@@ -25,13 +23,12 @@ TG_CHAT  = os.getenv("TG_CHAT_ID")
 
 if not all([USERNAME, PASSWORD, TG_TOKEN, TG_CHAT]):
     raise ValueError(
-        "环境变量缺失，请检查 GitHub Secrets 配置 "
+        "环境变量缺失，请检查 GitHub Secrets "
         "(AR_USERNAME, AR_PASSWORD, TG_BOT_TOKEN, TG_CHAT_ID)"
     )
 
 BJT = timezone(timedelta(hours=8))
 
-# ─────────────────────── 日志 ───────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -41,90 +38,59 @@ logger = logging.getLogger("anyrouter-checkin")
 
 
 # ════════════════════════════════════════════════════
-#  acw_sc__v2 Challenge Solver
+#  acw_sc__v2 Challenge Solver (纯 Python)
 # ════════════════════════════════════════════════════
+#
+# 算法逆向分析:
+#   1. 网页返回 JS challenge，含 arg1 (40 字符 hex)
+#   2. JS 用置换表 m 重排 arg1 字符位置
+#   3. 重排结果与固定 key p 做逐字节 XOR
+#   4. 输出 hex 字符串作为 acw_sc__v2 cookie
+#
+# key p 由 JS 混淆的 base64 解码函数得出，经逆向确认为常量。
+# 置换表 m 同样是常量，从 JS 中直接提取。
+#
 
-# Node.js 脚本：获取 challenge 页面 → 执行 JS → 输出 acw_sc__v2 cookie
-# 不需要浏览器，只需要 Node.js 运行时来执行 challenge JS
-_CHALLENGE_SOLVER_JS = r"""
-const https = require('https');
-const zlib = require('zlib');
+# 置换表（从 JS 中提取，40 个元素对应 arg1 的 40 个字符）
+_PERM = [
+    0xf, 0x23, 0x1d, 0x18, 0x21, 0x10, 0x1, 0x26,
+    0xa,  0x9,  0x13, 0x1f, 0x28, 0x1b, 0x16, 0x17,
+    0x19, 0xd,  0x6,  0xb,  0x27, 0x12, 0x14, 0x8,
+    0xe,  0x15, 0x20, 0x1a, 0x2,  0x1e, 0x7,  0x4,
+    0x11, 0x5,  0x3,  0x1c, 0x22, 0x25, 0xc,  0x24,
+]
 
-function fetch(url) {
-    return new Promise((resolve, reject) => {
-        https.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
-            }
-        }, res => {
-            const chunks = [];
-            res.on('data', c => chunks.push(c));
-            res.on('end', () => {
-                const buf = Buffer.concat(chunks);
-                if (res.headers['content-encoding'] === 'gzip') {
-                    zlib.gunzip(buf, (e, d) => resolve(e ? buf.toString() : d.toString()));
-                } else {
-                    resolve(buf.toString());
-                }
-            });
-        }).on('error', reject);
-    });
-}
-
-async function main() {
-    const html = await fetch('https://anyrouter.top/');
-    const m = html.match(/arg1='([A-F0-9]+)'/);
-    if (!m) { process.exit(1); }
-
-    let cookieResult = '';
-    const mockDoc = new Proxy({}, {
-        set(t, p, v) {
-            t[p] = v;
-            if (String(p) === 'cookie') cookieResult = String(v);
-            return true;
-        },
-        get(t, p) {
-            if (p === 'location') return new Proxy({}, { get(_, k) { return k === 'reload' ? () => {} : undefined; } });
-            if (p === 'cookie') return '';
-            return t[p];
-        }
-    });
-
-    const sm = html.match(/<script>([\s\S]+?)<\/script>/);
-    if (sm) {
-        try { new Function('document', sm[1] + ';')(mockDoc); } catch (e) {}
-    }
-
-    const acwMatch = cookieResult.match(/acw_sc__v2=([^;]+)/);
-    if (!acwMatch) { process.exit(1); }
-
-    process.stdout.write(JSON.stringify({ arg1: m[1], cookie: acwMatch[1] }));
-}
-main();
-"""
+# XOR key（从 JS a0j(0x115) 解码得出，经多次验证为常量）
+_KEY_HEX = "3000176000856006061501533003690027800375"
 
 
-def solve_acw_sc_v2() -> str | None:
+def solve_acw_sc_v2(html: str) -> str | None:
     """
-    解决 acw_sc__v2 challenge，返回 cookie 值。
-    使用 Node.js 执行 challenge JS (纯协议，无浏览器)。
+    从 challenge HTML 中提取 arg1，计算 acw_sc__v2 cookie 值。
+    返回完整的 cookie 值字符串，失败返回 None。
     """
-    try:
-        result = subprocess.run(
-            ["node", "-e", _CHALLENGE_SOLVER_JS],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            data = json.loads(result.stdout.strip())
-            acw = data.get("cookie")
-            if acw:
-                logger.info(f"✅ acw_sc__v2 challenge 已解决")
-                return acw
-    except Exception as e:
-        logger.warning(f"Challenge solver 失败: {e}")
+    m = re.search(r"arg1='([A-F0-9]{40})'", html)
+    if not m:
+        return None
+    arg1 = m.group(1)
 
-    logger.error("❌ acw_sc__v2 challenge 解决失败")
-    return None
+    # 步骤 1: 用置换表重排 arg1
+    # JS 逻辑: for x in arg1: for z in perm: if perm[z]==x+1: q[z]=arg1[x]
+    q = [''] * 40
+    for x in range(40):
+        for z in range(40):
+            if _PERM[z] == x + 1:
+                q[z] = arg1[x]
+    permuted = ''.join(q)
+
+    # 步骤 2: 逐字节 XOR
+    # JS: parseInt(permuted.substr(i,2),16) ^ parseInt(key.substr(i,2),16)
+    result = ''
+    for i in range(0, 40, 2):
+        a = int(permuted[i:i+2], 16) ^ int(_KEY_HEX[i:i+2], 16)
+        result += format(a, '02x')
+
+    return result
 
 
 # ════════════════════════════════════════════════════
@@ -134,9 +100,7 @@ def send_tg(text: str) -> bool:
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
         r = requests.post(url, json={
-            "chat_id": TG_CHAT,
-            "text": text,
-            "parse_mode": "HTML",
+            "chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
         }, timeout=30)
         r.raise_for_status()
         logger.info("✅ TG 消息发送成功")
@@ -160,13 +124,6 @@ def fmt_balance(quota: int, used_quota: int) -> str:
 #  纯协议签到核心
 # ════════════════════════════════════════════════════
 def do_checkin() -> dict:
-    """
-    纯 HTTP 协议完成签到:
-    1. 破解 acw_sc__v2 challenge
-    2. 用户名/密码登录获取 token
-    3. 签到
-    4. 获取余额
-    """
     result = {"success": False, "balance": None, "error": None}
     sess = requests.Session()
     sess.headers.update({
@@ -180,21 +137,24 @@ def do_checkin() -> dict:
     })
 
     try:
-        # ── 1. 破解 acw_sc__v2 ──
-        logger.info("🔐 破解 acw_sc__v2 challenge...")
-        acw_value = solve_acw_sc_v2()
+        # ── 1. 获取 challenge 并破解 ──
+        logger.info("🔐 获取并破解 acw_sc__v2 challenge...")
+        resp = sess.get(f"{BASE_URL}/", timeout=15)
+        resp.raise_for_status()
+
+        acw_value = solve_acw_sc_v2(resp.text)
         if not acw_value:
-            raise RuntimeError("acw_sc__v2 challenge 破解失败")
+            raise RuntimeError("acw_sc__v2 challenge 破解失败（未找到 arg1）")
         sess.cookies.set("acw_sc__v2", acw_value, domain="anyrouter.top", path="/")
+        logger.info(f"✅ challenge 已破解")
 
         # ── 2. 验证 API 可访问 ──
-        logger.info("✅ 验证 API 可访问...")
         status_resp = sess.get(f"{BASE_URL}/api/status", timeout=15)
         try:
             status_data = status_resp.json()
-            logger.info(f"API 状态: success={status_data.get('success', 'N/A')}")
+            logger.info(f"✅ API 可访问: success={status_data.get('success')}")
         except json.JSONDecodeError:
-            raise RuntimeError("acw_sc__v2 cookie 未生效，API 仍返回 HTML")
+            raise RuntimeError("cookie 未生效，API 仍返回 HTML")
 
         # ── 3. 登录 ──
         logger.info("🔑 登录中...")
@@ -206,31 +166,25 @@ def do_checkin() -> dict:
         login_data = login_resp.json()
 
         if not login_data.get("success", False):
-            error_msg = login_data.get("message", "未知错误")
-            raise RuntimeError(f"登录失败: {error_msg}")
+            raise RuntimeError(f"登录失败: {login_data.get('message', '未知')}")
 
-        # 提取 token
         token = login_data.get("data", "")
         if not token:
             raise RuntimeError("登录成功但未返回 token")
 
-        logger.info(f"✅ 登录成功! token: {token[:20]}...")
+        logger.info("✅ 登录成功")
         sess.headers["Authorization"] = f"Bearer {token}"
 
         # ── 4. 签到 ──
-        logger.info("🎁 执行签到...")
+        logger.info("🎁 签到中...")
         signin_resp = sess.post(f"{BASE_URL}/api/user/sign_in", timeout=15)
         signin_data = signin_resp.json()
 
         if signin_data.get("success"):
-            earned = signin_data.get("data", "")
-            logger.info(f"🎉 签到成功! 获得: {earned}")
+            logger.info(f"🎉 签到成功! {signin_data.get('data', '')}")
         else:
             msg = signin_data.get("message", "")
-            if "已签到" in msg or "already" in msg.lower():
-                logger.info(f"ℹ️ 今日已签到: {msg}")
-            else:
-                logger.warning(f"⚠️ 签到返回: {msg}")
+            logger.info(f"签到返回: {msg}")
 
         # ── 5. 获取余额 ──
         logger.info("💰 获取余额...")
@@ -239,18 +193,18 @@ def do_checkin() -> dict:
 
         if user_data.get("success"):
             user = user_data.get("data", {})
-            quota      = int(user.get("quota", 0))
-            used_quota = int(user.get("used_quota", 0))
-            result["balance"] = fmt_balance(quota, used_quota)
-            logger.info(f"💰 余额获取成功")
+            result["balance"] = fmt_balance(
+                int(user.get("quota", 0)),
+                int(user.get("used_quota", 0)),
+            )
+            logger.info("✅ 余额获取成功")
         else:
-            result["balance"] = "余额获取失败（但签到成功）"
-            logger.warning(f"余额获取失败: {user_data}")
+            result["balance"] = "余额获取失败"
 
         result["success"] = True
 
     except Exception as exc:
-        logger.error(f"❌ 执行失败: {exc}")
+        logger.error(f"❌ {exc}")
         result["error"] = str(exc)
 
     return result
@@ -261,10 +215,9 @@ def do_checkin() -> dict:
 # ════════════════════════════════════════════════════
 def main():
     now_bjt = datetime.now(BJT).strftime("%Y-%m-%d %H:%M:%S")
-    logger.info(f"═══ AnyRouter 纯协议签到开始 [{now_bjt} BJT] ═══")
+    logger.info(f"═══ AnyRouter 纯 Python 签到 [{now_bjt} BJT] ═══")
 
     result = do_checkin()
-
     now_bjt = datetime.now(BJT).strftime("%Y-%m-%d %H:%M:%S")
 
     if result["success"]:
@@ -274,19 +227,15 @@ def main():
             f"👤 用户: <code>{USERNAME}</code>\n"
             f"{result['balance']}\n"
             f"⏰ 时间: {now_bjt} (BJT)\n\n"
-            f"<i>🤖 由 GitHub Actions 纯协议自动执行</i>"
+            f"<i>🤖 纯协议自动签到</i>"
         )
-        logger.info("🎉 签到成功，推送 TG 通知...")
     else:
         msg = (
             f"❌ <b>AnyRouter 签到失败</b>\n\n"
-            f"🌐 站点: anyrouter.top\n"
             f"👤 用户: <code>{USERNAME}</code>\n"
             f"❗ 错误: <code>{result['error']}</code>\n"
-            f"⏰ 时间: {now_bjt} (BJT)\n\n"
-            f"<i>🤖 请检查 GitHub Actions 日志</i>"
+            f"⏰ 时间: {now_bjt} (BJT)"
         )
-        logger.error("💥 签到失败，推送 TG 错误通知...")
 
     send_tg(msg)
     logger.info("═══ 签到任务结束 ═══")

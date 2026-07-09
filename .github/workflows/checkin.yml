@@ -5,43 +5,30 @@ on:
     # 北京时间每天 09:00 = UTC 01:00
     - cron: "0 1 * * *"
   workflow_dispatch:
-    inputs:
-      debug:
-        description: "开启调试模式 (true/false)"
-        required: false
-        default: "false"
 
 jobs:
   checkin:
-    name: "纯协议签到 & 推送余额"
+    name: "纯协议签到"
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: "📦 Checkout 代码"
+      - name: "📦 Checkout"
         uses: actions/checkout@v4
 
-      - name: "🐍 配置 Python 3.11"
+      - name: "🐍 Python 3.11"
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: "📦 配置 Node.js"
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: "📥 安装 Python 依赖"
+      - name: "📥 安装依赖"
         run: pip install -r requirements.txt
 
-      - name: "🚀 执行纯协议签到"
+      - name: "🚀 签到"
         env:
-          AR_USERNAME:   ${{ secrets.AR_USERNAME }}
-          AR_PASSWORD:   ${{ secrets.AR_PASSWORD }}
-          TG_BOT_TOKEN:  ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID:    ${{ secrets.TG_CHAT_ID }}
-        run: |
-          echo "⏰ 签到时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S') (BJT)"
-          echo "📋 模式: 纯协议 (无浏览器/Playwright)"
-          python checkin.py
+          AR_USERNAME:  ${{ secrets.AR_USERNAME }}
+          AR_PASSWORD:  ${{ secrets.AR_PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+        run: python checkin.py
