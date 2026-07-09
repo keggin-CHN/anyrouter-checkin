@@ -168,13 +168,22 @@ def do_checkin() -> dict:
         if not login_data.get("success", False):
             raise RuntimeError(f"登录失败: {login_data.get('message', '未知')}")
 
-        token = login_data.get("data", "")
+        # 登录响应 data 可能是 token 字符串或 {id, username, token} 对象
+        raw_data = login_data.get("data", "")
+        if isinstance(raw_data, dict):
+            token = raw_data.get("token", "")
+            user_id = raw_data.get("id", "")
+            logger.info(f"✅ 登录成功, user_id={user_id}, token={token[:20]}...")
+        else:
+            token = str(raw_data)
+            logger.info(f"✅ 登录成功, token={token[:20]}...")
+
+        logger.info(f"登录响应: {json.dumps(login_data, ensure_ascii=False)[:500]}")
+        logger.info(f"登录 set-cookie: {login_resp.headers.get('set-cookie', 'NONE')}")
+
         if not token:
             raise RuntimeError("登录成功但未返回 token")
 
-        logger.info(f"✅ 登录成功, token: {token[:20]}...")
-        logger.info(f"登录响应: {json.dumps(login_data, ensure_ascii=False)[:300]}")
-        logger.info(f"登录 set-cookie: {login_resp.headers.get('set-cookie', 'NONE')}")
         sess.headers["Authorization"] = f"Bearer {token}"
 
         # ── 4. 签到 ──
@@ -188,11 +197,23 @@ def do_checkin() -> dict:
             msg = signin_data.get("message", "")
             logger.info(f"签到返回: {msg}")
 
+        # 从 sign_in 响应中可能获取用户 ID
+        logger.info(f"签到响应: {json.dumps(signin_data, ensure_ascii=False)[:300]}")
+
         # ── 5. 获取余额 ──
         logger.info("💰 获取余额...")
+        # 先试不加 New-Api-User
         user_resp = sess.get(f"{BASE_URL}/api/user/self", timeout=15)
-        logger.info(f"余额 API 状态码: {user_resp.status_code}")
-        logger.info(f"余额 API 响应: {user_resp.text[:300]}")
+        logger.info(f"余额 API 状态码(无header): {user_resp.status_code}")
+        logger.info(f"余额 API 响应(无header): {user_resp.text[:300]}")
+
+        # 如果 401，用登录返回的 user_id 重试
+        if user_resp.status_code == 401 and 'user_id' in dir() and user_id:
+            logger.info(f"尝试 New-Api-User: {user_id}")
+            sess.headers["New-Api-User"] = str(user_id)
+            user_resp = sess.get(f"{BASE_URL}/api/user/self", timeout=15)
+            logger.info(f"余额 API 状态码(user_id): {user_resp.status_code}")
+            logger.info(f"余额 API 响应(user_id): {user_resp.text[:300]}")
 
         try:
             user_data = user_resp.json()
