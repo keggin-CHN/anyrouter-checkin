@@ -189,7 +189,14 @@ def do_checkin() -> dict:
         # ── 5. 获取余额 ──
         logger.info("💰 获取余额...")
         user_resp = sess.get(f"{BASE_URL}/api/user/self", timeout=15)
-        user_data = user_resp.json()
+        logger.info(f"余额 API 状态码: {user_resp.status_code}")
+        logger.info(f"余额 API 响应: {user_resp.text[:300]}")
+
+        try:
+            user_data = user_resp.json()
+        except Exception as e:
+            logger.error(f"余额响应非 JSON: {e}")
+            user_data = {}
 
         if user_data.get("success"):
             user = user_data.get("data", {})
@@ -199,7 +206,8 @@ def do_checkin() -> dict:
             )
             logger.info("✅ 余额获取成功")
         else:
-            result["balance"] = "余额获取失败"
+            result["balance"] = f"余额获取失败: {user_data.get('message', '未知')}"
+            logger.warning(f"余额获取失败: {user_data}")
 
         result["success"] = True
 
