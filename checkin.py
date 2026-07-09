@@ -182,7 +182,7 @@ def do_checkin() -> dict:
         if not user_id:
             raise RuntimeError("登录成功但未返回用户 ID")
 
-        logger.info(f"✅ 登录成功, user_id={user_id}")
+        logger.info(f"✅ 登录成功")
 
         # 设置认证: session cookie + New-Api-User
         if session_cookie:
