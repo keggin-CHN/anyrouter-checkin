@@ -174,6 +174,7 @@ def do_checkin() -> dict:
 
         logger.info("✅ 登录成功")
         sess.headers["Authorization"] = f"Bearer {token}"
+        sess.headers["New-Api-User"] = "1"
 
         # ── 4. 签到 ──
         logger.info("🎁 签到中...")
