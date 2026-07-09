@@ -10,7 +10,7 @@
 - 🔐 **纯 Python** 实现 `acw_sc__v2` challenge 破解
 - 🪶 单文件，仅依赖 `requests`，无 Playwright / Node.js / 第三方服务
 - 🚀 整个流程 < 10 秒
-- 📨 Telegram Bot 推送签到结果
+- 📨 Telegram Bot 推送签到结果和余额
 
 ## 🚀 快速开始
 
@@ -29,23 +29,37 @@
 
 ### 3. 启用 Actions
 
+进入 `Actions` 页面，点击 `Enable GitHub Actions`。每天北京时间 09:00 自动运行。
+
 ## 🏗️ 技术架构
 
 ```
 GET anyrouter.top → 返回 acw_sc__v2 JS challenge (含 arg1)
     ↓
-纯 Python: 置换表重排 arg1 → XOR 固定 key → acw_sc__v2 cookie
+纯 Python: 置换表重排 arg1 → XOR 固定 key → 生成 acw_sc__v2 cookie
     ↓
-POST /api/user/login → Bearer token
+POST /api/user/login {username, password} → session cookie + user_id
     ↓
-POST /api/user/sign_in → 签到
+POST /api/user/sign_in (session cookie 认证) → 签到领配额
     ↓
-GET /api/user/self → 余额
+GET /api/user/self (session cookie + New-Api-User header) → 余额
     ↓
-Telegram 推送
+Telegram Bot API → 推送结果
 ```
 
-无浏览器引擎，无打码服务，纯 HTTP 协议。
+纯 HTTP 协议，无浏览器引擎，无打码服务。
+
+## 📩 通知示例
+
+```
+✅ AnyRouter 每日签到成功
+
+🌐 站点: anyrouter.top
+👤 用户: keggin
+💰 剩余: $5.2340
+📊 总量: $10.0000 | 已用: $4.7660
+⏰ 时间: 2026-07-09 09:00:03 (BJT)
+```
 
 ## ⚠️ 免责声明
 
