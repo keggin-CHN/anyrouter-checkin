@@ -172,9 +172,10 @@ def do_checkin() -> dict:
         if not token:
             raise RuntimeError("登录成功但未返回 token")
 
-        logger.info("✅ 登录成功")
+        logger.info(f"✅ 登录成功, token: {token[:20]}...")
+        logger.info(f"登录响应: {json.dumps(login_data, ensure_ascii=False)[:300]}")
+        logger.info(f"登录 set-cookie: {login_resp.headers.get('set-cookie', 'NONE')}")
         sess.headers["Authorization"] = f"Bearer {token}"
-        sess.headers["New-Api-User"] = "1"
 
         # ── 4. 签到 ──
         logger.info("🎁 签到中...")
